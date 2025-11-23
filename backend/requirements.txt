@@ -1,10 +1,14 @@
 fastapi
 uvicorn
 python-multipart
-pydantic
+pypdf
 python-dotenv
 langchain-groq
-langchain-core
-pypdf
+langchain
+langchain_community
+pydantic
 edge-tts
 cloudinary
+groq
+aiofiles
+requests
