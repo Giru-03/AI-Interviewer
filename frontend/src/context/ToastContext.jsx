@@ -1,6 +1,14 @@
-import React, { useState, useCallback } from 'react';
+import React, { useContext, useState, useCallback } from 'react';
 import { X } from 'lucide-react';
 import { ToastContext } from './ToastContextHelpers';
+
+export const useToast = () => {
+  const context = useContext(ToastContext);
+  if (!context) {
+    throw new Error('useToast must be used within a ToastProvider');
+  }
+  return context;
+};
 
 export const ToastProvider = ({ children }) => {
   const [toasts, setToasts] = useState([]);
@@ -18,8 +26,12 @@ export const ToastProvider = ({ children }) => {
     }, 4000);
   }, [removeToast]);
 
+  const showError = useCallback((message) => showToast(message, 'error'), [showToast]);
+  const showSuccess = useCallback((message) => showToast(message, 'success'), [showToast]);
+  const showInfo = useCallback((message) => showToast(message, 'info'), [showToast]);
+
   return (
-    <ToastContext.Provider value={{ showToast }}>
+    <ToastContext.Provider value={{ showToast, showError, showSuccess, showInfo }}>
       {children}
       <div id="toast-container" style={{
         position: 'fixed', bottom: '20px', right: '20px', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 1000, maxWidth: '500px'
