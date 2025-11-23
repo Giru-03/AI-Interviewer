@@ -16,10 +16,10 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field, SecretStr
-import requests  # ✅ ADDED for ElevenLabs
+import requests
 import cloudinary
 import cloudinary.uploader
-from groq import Groq 
+from groq import Groq
 
 # Load environment variables
 load_dotenv()
@@ -52,7 +52,7 @@ class InterviewReport(BaseModel):
 class TextInteraction(BaseModel):
     session_id: str
     text: str
-    is_silence: bool = False 
+    is_silence: bool = False
 
 # --- FastAPI App Setup ---
 app = FastAPI()
@@ -144,7 +144,7 @@ You are now starting the interview.
         remaining = self.get_remaining_time()
 
         if self.finished:
-             return "The interview has already concluded. Thank you."
+            return "The interview has already concluded. Thank you."
 
         if remaining <= 0:
             self.finished = True
@@ -160,41 +160,40 @@ You are now starting the interview.
 
         response = await llm.ainvoke(messages)
         resp_content = response.content if isinstance(response.content, str) else json.dumps(response.content)
-        
+
         lower_resp = resp_content.lower()
         if "concludes the interview" in lower_resp or "concludes our interview" in lower_resp or "thank you for your time" in lower_resp:
-             self.finished = True
+            self.finished = True
 
         self.memory.add_message(AIMessage(content=resp_content))
         return resp_content
 
-# WARNING: This dictionary is in-memory. On Serverless (Vercel), this will reset frequently.
-# For production, use Redis or a Database.
+# In-memory sessions
 sessions: Dict[str, InterviewSession] = {}
 
-# ✅ NEW: ElevenLabs TTS FUNCTION (REPLACES edge-tts COMPLETELY)
+# --- ElevenLabs TTS (Works on Vercel!) ---
 async def generate_audio(text: str, session_id: str):
     if not text or not text.strip():
         return None
-    
+
     api_key = os.getenv("ELEVENLABS_API_KEY")
-    voice_id = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # Default: Professional male voice
-    
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # Andrew - professional male
+
     if not api_key:
-        print("Warning: ELEVENLABS_API_KEY not set - skipping audio generation")
+        print("ELEVENLABS_API_KEY not set")
         return None
 
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
-    
+
     headers = {
         "Accept": "audio/mpeg",
         "xi-api-key": api_key,
         "Content-Type": "application/json"
     }
-    
-    data = {
+
+    payload = {
         "text": text,
-        "model_id": "eleven_turbo_v2_5",  # Fastest + highest quality
+        "model_id": "eleven_turbo_v2_5",
         "voice_settings": {
             "stability": 0.75,
             "similarity_boost": 0.85,
@@ -204,21 +203,15 @@ async def generate_audio(text: str, session_id: str):
     }
 
     try:
-        response = requests.post(url, json=data, headers=headers, stream=True, timeout=30)
+        response = requests.post(url, json=payload, headers=headers, stream=True, timeout=30)
         response.raise_for_status()
 
         audio_bytes = io.BytesIO()
         for chunk in response.iter_content(chunk_size=8192):
             if chunk:
                 audio_bytes.write(chunk)
-        
-        if audio_bytes.tell() == 0:
-            print("Warning: No audio data received from ElevenLabs")
-            return None
-            
         audio_bytes.seek(0)
 
-        # Upload to Cloudinary
         upload_result = cloudinary.uploader.upload(
             audio_bytes,
             resource_type="video",
@@ -232,6 +225,7 @@ async def generate_audio(text: str, session_id: str):
         print(f"ElevenLabs TTS Error: {e}")
         return None
 
+# --- PDF Text Extraction ---
 def extract_text_from_pdf(file_bytes):
     try:
         reader = PdfReader(io.BytesIO(file_bytes))
@@ -246,10 +240,9 @@ def extract_text_from_pdf(file_bytes):
         return ""
 
 # --- Routes ---
-
 @app.get("/")
 async def root():
-    return {"message": "Interview AI Backend is Running ✅ ElevenLabs TTS Ready"}
+    return {"message": "Interview AI Backend Running – ElevenLabs TTS Active"}
 
 @app.post("/start_interview")
 async def start_interview(
@@ -263,18 +256,14 @@ async def start_interview(
         raise HTTPException(status_code=400, detail="Duration must be between 3 and 45 minutes.")
 
     resume_text = ""
-    if resume and resume.file:
+    if resume and resume.filename:
         content = await resume.read()
         if len(content) > 0:
             resume_text = extract_text_from_pdf(content)
-    
+
     if not resume_text or len(resume_text.strip()) < 10:
-        print("Warning: No meaningful text extracted from PDF. Using default.")
         resume_text = "No resume provided."
 
-    name_parts = name.strip().lower().split()
-    resume_lower = resume_text.lower()
-    
     session = InterviewSession(name, role, resume_text, duration, mode)
     sessions[session.id] = session
 
@@ -283,7 +272,6 @@ async def start_interview(
 
     audio_url = None
     if mode == "voice":
-        print(f"🔊 Generating initial greeting audio for {name}...")
         audio_url = await generate_audio(greeting, session.id)
 
     return {
@@ -305,9 +293,7 @@ async def process_audio(
     user_text = ""
     is_silence = False
 
-    # Use system temp directory for Groq transcription
-    temp_dir = tempfile.gettempdir()
-    temp_file_path = os.path.join(temp_dir, f"temp_{uuid.uuid4()}.webm")
+    temp_file_path = os.path.join(tempfile.gettempdir(), f"temp_{uuid.uuid4()}.webm")
     
     try:
         contents = await file.read()
@@ -315,7 +301,6 @@ async def process_audio(
             f.write(contents)
 
         client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-        
         with open(temp_file_path, "rb") as audio_file:
             transcription = client.audio.transcriptions.create(
                 file=audio_file,
@@ -339,12 +324,11 @@ async def process_audio(
     
     audio_url = ""
     if session.mode == "voice":
-        print(f"🔊 Generating AI response audio...")
         audio_url = await generate_audio(ai_response, session.id)
 
     return {
         "finished": session.finished,
-        "user_text": user_text if not is_silence else "[SILENCE]",
+        "user_text": "[SILENCE]" if is_silence else user_text,
         "ai_text": ai_response,
         "audio_url": audio_url or ""
     }
@@ -355,8 +339,7 @@ async def process_text(interaction: TextInteraction):
         raise HTTPException(status_code=404, detail="Session not found")
     
     session = sessions[interaction.session_id]
-    
-    ai_response = await session.get_response(interaction.text, is_silence=interaction.is_silence)
+    ai_response = await session.get_response(interaction.text, interaction.is_silence)
     
     return {
         "finished": session.finished,
@@ -374,14 +357,11 @@ async def generate_report(session_id: str):
     for msg in session.memory.messages:
         if isinstance(msg, HumanMessage):
             content = msg.content
-            if content == "[SILENCE]" or content == "":
+            if content in ("[SILENCE]", "", None):
                 content = "[No Response / Silence]"
-            
-            cand = content if isinstance(content, str) else json.dumps(content)
-            transcript += f"Candidate: {cand}\n"
+            transcript += f"Candidate: {content}\n"
         elif isinstance(msg, AIMessage):
-            content = msg.content if isinstance(msg.content, str) else json.dumps(msg.content)
-            content = content.strip()
+            content = str(msg.content).strip()
             if content and "thank you for joining" not in content.lower() and "this concludes" not in content.lower():
                 transcript += f"Interviewer: {content}\n"
 
@@ -427,21 +407,19 @@ Transcript:
             "transcript": transcript,
             "format_instructions": parser.get_format_instructions()
         })
-        
         return JSONResponse(content=report)
     except Exception as e:
-        print(f"Report error: {e}")
+        print(f"Report generation error: {e}")
         return JSONResponse(content={
             "summary": "Error analyzing interview transcript.",
             "communication_rating": 0,
             "technical_rating": 0,
             "culture_fit_rating": 0,
             "strengths": ["Analysis failed"],
-            "areas_for_improvement": ["Please try again"],
+            "areas_for_improvement": ["Please try again later"],
             "transcript_analysis": []
         })
 
-# For Localhost:
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
