@@ -4,7 +4,6 @@ import time
 import io
 import json
 import tempfile
-import shutil
 from typing import List, Dict
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +19,7 @@ from pydantic import BaseModel, Field, SecretStr
 import edge_tts
 import cloudinary
 import cloudinary.uploader
+from groq import Groq 
 
 # Load environment variables
 load_dotenv()
@@ -174,20 +174,26 @@ sessions: Dict[str, InterviewSession] = {}
 
 # --- Helper Functions ---
 
+# --- CORRECTED: USING BYTESIO TO STREAM DIRECTLY TO MEMORY AND FIXING CLOUDINARY ARGUMENT ---
 async def generate_audio(text: str, session_id: str):
     if not text or not text.strip():
         return None
     
-    # MODIFIED: Use system temp directory for Vercel/Local compatibility
-    temp_dir = tempfile.gettempdir()
-    temp_filename = os.path.join(temp_dir, f"temp_resp_{session_id}_{int(time.time())}.mp3")
-    
     try:
         communicate = edge_tts.Communicate(text, "en-US-AndrewNeural")
-        await communicate.save(temp_filename)
         
+        mp3_fp = io.BytesIO()
+        
+        # Stream audio chunks directly to memory, checking for data key
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio" and "data" in chunk: 
+                mp3_fp.write(chunk["data"])
+                
+        mp3_fp.seek(0)
+        
+        # Upload directly from memory to Cloudinary (FIXED: removed redundant 'file' argument)
         upload_result = cloudinary.uploader.upload(
-            temp_filename, 
+            mp3_fp, 
             resource_type="video", 
             folder="interview_audio",
             public_id=f"audio_{session_id}_{int(time.time())}"
@@ -197,12 +203,6 @@ async def generate_audio(text: str, session_id: str):
     except Exception as e:
         print(f"Audio Generation/Upload Error: {e}")
         return None
-    finally:
-        if os.path.exists(temp_filename):
-            try:
-                os.remove(temp_filename)
-            except:
-                pass
 
 def extract_text_from_pdf(file_bytes):
     try:
@@ -241,16 +241,12 @@ async def start_interview(
             resume_text = extract_text_from_pdf(content)
     
     if not resume_text or len(resume_text.strip()) < 10:
-        # Fallback for testing without PDF
-        print("Warning: No resume text extracted.")
+        print("Warning: No meaningful text extracted from PDF. Using default.")
         resume_text = "No resume provided."
 
-    # Name validation logic (Optional - commented out for easier testing)
-    # name_parts = name.strip().lower().split()
-    # resume_lower = resume_text.lower()
-    # if not all(part in resume_lower for part in name_parts):
-    #     raise HTTPException(...)
-
+    name_parts = name.strip().lower().split()
+    resume_lower = resume_text.lower()
+    
     session = InterviewSession(name, role, resume_text, duration, mode)
     sessions[session.id] = session
 
@@ -280,7 +276,7 @@ async def process_audio(
     user_text = ""
     is_silence = False
 
-    # MODIFIED: Use system temp directory
+    # Use system temp directory for Groq transcription
     temp_dir = tempfile.gettempdir()
     temp_file_path = os.path.join(temp_dir, f"temp_{uuid.uuid4()}.webm")
     
@@ -289,12 +285,11 @@ async def process_audio(
         with open(temp_file_path, "wb") as f:
             f.write(contents)
 
-        from groq import Groq
         client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
         
         with open(temp_file_path, "rb") as audio:
             transcription = client.audio.transcriptions.create(
-                file=(temp_file_path, audio.read()),
+                file=(temp_file_path, audio.read()), 
                 model="whisper-large-v3-turbo",
                 language="en",
                 temperature=0.0,
@@ -403,13 +398,6 @@ Transcript:
             "format_instructions": parser.get_format_instructions()
         })
         
-        # Cleanup session (Optional for Vercel since memory is volatile anyway)
-        # try:
-        #     if session_id in sessions:
-        #         del sessions[session_id]
-        # except:
-        #     pass
-
         return JSONResponse(content=report)
     except Exception as e:
         print(f"Report error: {e}")
