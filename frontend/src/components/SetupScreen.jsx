@@ -65,7 +65,7 @@ export default function SetupScreen({ onStart }) {
     <div className="glass-card relative">
       <div className="header-container">
         <div className="logo-box">
-          <Play size={24} color="white" fill="white" />
+          <img src="./favicon.svg" alt="Logo" className="logo-image" />
         </div>
         <div>
           <h1 className="title-text">AI Interview Pro</h1>

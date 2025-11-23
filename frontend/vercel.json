@@ -9,7 +9,17 @@
       }
     }
   ],
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "https://ai-interviewer-api.vercel.app/$1"
+    }
+  ],
   "routes": [
+    {
+      "src": "/favicon.svg",
+      "dest": "/favicon.svg"
+    },
     {
       "src": "/assets/(.*)",
       "dest": "/assets/$1"
