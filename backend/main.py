@@ -166,7 +166,7 @@ async def generate_audio(text: str, session_id: str):
     if not text or not text.strip():
         return None
     
-    temp_filename = f"temp_resp_{session_id}_{int(time.time())}.mp3"
+    temp_filename = f"/tmp/temp_resp_{session_id}_{int(time.time())}.mp3"
     
     try:
         communicate = edge_tts.Communicate(text, "en-US-AndrewNeural")
@@ -263,7 +263,7 @@ async def process_audio(
     user_text = ""
     is_silence = False
 
-    temp_file = f"temp_{uuid.uuid4()}.webm"
+    temp_file = f"/tmp/temp_{uuid.uuid4()}.webm"
     try:
         contents = await file.read()
         if len(contents) > 1024:
