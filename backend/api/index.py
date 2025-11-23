@@ -21,17 +21,14 @@ import cloudinary
 import cloudinary.uploader
 from groq import Groq
 
-# Load environment variables
 load_dotenv()
 
-# Configure Cloudinary
 cloudinary.config(
     cloud_name=os.getenv('CLOUDINARY_CLOUD_NAME'),
     api_key=os.getenv('CLOUDINARY_API_KEY'),
     api_secret=os.getenv('CLOUDINARY_API_SECRET')
 )
 
-# --- Pydantic Models ---
 class FeedbackDetail(BaseModel):
     question: str
     feedback: str
@@ -54,7 +51,6 @@ class TextInteraction(BaseModel):
     text: str
     is_silence: bool = False
 
-# --- FastAPI App Setup ---
 app = FastAPI()
 
 app.add_middleware(
@@ -64,7 +60,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- LLM Setup ---
 groq_key = os.environ.get("GROQ_API_KEY")
 llm = ChatGroq(
     temperature=0.6,
@@ -78,7 +73,6 @@ llm_strict = ChatGroq(
     api_key=SecretStr(groq_key) if groq_key else None
 )
 
-# --- Session Management ---
 class InterviewSession:
     def __init__(self, name: str, role: str, resume_text: str, duration_minutes: int, mode: str = "voice"):
         self.id = str(uuid.uuid4())
@@ -168,16 +162,14 @@ You are now starting the interview.
         self.memory.add_message(AIMessage(content=resp_content))
         return resp_content
 
-# In-memory sessions
 sessions: Dict[str, InterviewSession] = {}
 
-# --- ElevenLabs TTS (Works on Vercel!) ---
 async def generate_audio(text: str, session_id: str):
     if not text or not text.strip():
         return None
 
     api_key = os.getenv("ELEVENLABS_API_KEY")
-    voice_id = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # Andrew - professional male
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  
 
     if not api_key:
         print("ELEVENLABS_API_KEY not set")
@@ -225,7 +217,6 @@ async def generate_audio(text: str, session_id: str):
         print(f"ElevenLabs TTS Error: {e}")
         return None
 
-# --- PDF Text Extraction ---
 def extract_text_from_pdf(file_bytes):
     try:
         reader = PdfReader(io.BytesIO(file_bytes))
@@ -239,7 +230,6 @@ def extract_text_from_pdf(file_bytes):
         print(f"PDF Extraction Error: {e}")
         return ""
 
-# --- Routes ---
 @app.get("/")
 async def root():
     return {"message": "Interview AI Backend Running – ElevenLabs TTS Active"}
