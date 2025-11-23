@@ -141,7 +141,7 @@ export default function VoiceInterface({ sessionData, onEndSession, isEnding }) 
       maxTimeRef.current = setTimeout(() => {
           console.log("Max recording time reached.");
           stopRecording();
-      }, 6000);
+      }, 60000);
 
       if (mountedRef.current) setStatus('listening');
       detectSilence(analyserRef.current);
