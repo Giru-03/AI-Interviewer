@@ -301,10 +301,39 @@ def extract_text_from_pdf(file_bytes):
             page_text = page.extract_text()
             if page_text:
                 text += page_text + "\n"
+        print(f"Extracted {len(text)} chars from PDF")
         return text.strip()
     except Exception as e:
         print(f"PDF Extraction Error: {e}")
         return ""
+
+async def verify_name_match(name: str, resume_text: str) -> bool:
+    print(f"Verifying name: '{name}' against resume text length: {len(resume_text)}")
+    prompt = ChatPromptTemplate.from_template("""
+    You are a background verification system. 
+    Task: Verify if the candidate name provided matches the name on the resume.
+    
+    Candidate Name: "{name}"
+    
+    Resume Text (First 3000 chars):
+    {resume_snippet}
+    
+    Instructions:
+    1. Look for the name at the beginning of the resume.
+    2. Allow for reasonable variations (e.g., "John" vs "Jonathan", "Doe" vs "Doe-Smith", "Bill" vs "William").
+    3. If the resume has NO name, return "YES" (benefit of the doubt).
+    4. If the name is completely different (e.g. "Alice" vs "Bob"), return "NO".
+    5. Return a JSON object with: {{"match": true, "reason": "explanation"}} or {{"match": false, "reason": "explanation"}}
+    """)
+    
+    chain = prompt | llm_strict | JsonOutputParser()
+    try:
+        res = await chain.ainvoke({"name": name, "resume_snippet": resume_text[:3000]})
+        print(f"Verification Result: {res}")
+        return res.get("match", True)
+    except Exception as e:
+        print(f"Name verification error: {e}")
+        return True # Fail open if LLM fails
 
 @app.get("/")
 async def root():
@@ -329,6 +358,14 @@ async def start_interview(
 
     if not resume_text or len(resume_text.strip()) < 10:
         resume_text = "No resume provided."
+    else:
+        # Verify name match if resume is provided
+        is_match = await verify_name_match(name, resume_text)
+        if not is_match:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Name mismatch: The name '{name}' does not appear to match the resume provided. Please check your input or upload the correct file."
+            )
 
     session = InterviewSession(name, role, resume_text, duration, mode)
     session_store.save(session)
