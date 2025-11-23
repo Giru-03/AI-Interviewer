@@ -104,6 +104,7 @@ export default function VoiceInterface({ sessionData, onEndSession, isEnding }) 
           setUserTranscript(prev => [...prev, data.user_text]);
         }
         setText(data.ai_text);
+        console.log("Received audio_url:", data.audio_url);
         playAudio(data.audio_url, data.finished);
       }
     } catch (e) {

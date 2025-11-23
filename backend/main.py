@@ -342,12 +342,12 @@ async def generate_report(session_id: str):
 
     if len(transcript.strip()) < 50:
         return JSONResponse(content={
-            "summary": "Insufficient responses provided.",
+            "summary": "Interview ended early or insufficient responses provided.",
             "communication_rating": 0,
             "technical_rating": 0,
             "culture_fit_rating": 0,
             "strengths": ["N/A"],
-            "areas_for_improvement": ["Did not complete the interview"],
+            "areas_for_improvement": ["Interview was not completed"],
             "transcript_analysis": []
         })
 
