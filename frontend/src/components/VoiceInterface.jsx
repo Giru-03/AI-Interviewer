@@ -67,12 +67,12 @@ export default function VoiceInterface({ sessionData, onEndSession, isEnding }) 
           }
           let rms = Math.sqrt(sum / dataArray.length);
           
-          if (rms < 0.03) { 
+          if (rms < 0.02) { // Lowered threshold to be less sensitive to background noise
               if (!silenceTimerRef.current) {
                   silenceTimerRef.current = setTimeout(() => {
                       console.log("Silence detected, stopping recording...");
                       stopRecording();
-                  }, 2500);
+                  }, 3000); // Increased silence duration to 3 seconds
               }
           } else {
               if (silenceTimerRef.current) {
@@ -138,10 +138,8 @@ export default function VoiceInterface({ sessionData, onEndSession, isEnding }) 
 
       mediaRecorderRef.current.start();
       
-      maxTimeRef.current = setTimeout(() => {
-          console.log("Max recording time reached.");
-          stopRecording();
-      }, 60000);
+      // Removed maxTimeRef timeout to allow unlimited speaking time until silence is detected
+      // maxTimeRef.current = setTimeout(() => { ... }, 60000);
 
       if (mountedRef.current) setStatus('listening');
       detectSilence(analyserRef.current);
