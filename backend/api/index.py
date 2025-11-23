@@ -16,7 +16,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field, SecretStr
-import edge_tts
+import requests  # ✅ ADDED for ElevenLabs
 import cloudinary
 import cloudinary.uploader
 from groq import Groq 
@@ -26,9 +26,9 @@ load_dotenv()
 
 # Configure Cloudinary
 cloudinary.config(
-    cloud_name = os.getenv('CLOUDINARY_CLOUD_NAME'),
-    api_key = os.getenv('CLOUDINARY_API_KEY'),
-    api_secret = os.getenv('CLOUDINARY_API_SECRET')
+    cloud_name=os.getenv('CLOUDINARY_CLOUD_NAME'),
+    api_key=os.getenv('CLOUDINARY_API_KEY'),
+    api_secret=os.getenv('CLOUDINARY_API_SECRET')
 )
 
 # --- Pydantic Models ---
@@ -172,36 +172,64 @@ You are now starting the interview.
 # For production, use Redis or a Database.
 sessions: Dict[str, InterviewSession] = {}
 
-# --- Helper Functions ---
-
-# --- CORRECTED: USING BYTESIO TO STREAM DIRECTLY TO MEMORY AND FIXING CLOUDINARY ARGUMENT ---
+# ✅ NEW: ElevenLabs TTS FUNCTION (REPLACES edge-tts COMPLETELY)
 async def generate_audio(text: str, session_id: str):
     if not text or not text.strip():
         return None
     
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # Default: Professional male voice
+    
+    if not api_key:
+        print("Warning: ELEVENLABS_API_KEY not set - skipping audio generation")
+        return None
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+    
+    headers = {
+        "Accept": "audio/mpeg",
+        "xi-api-key": api_key,
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "text": text,
+        "model_id": "eleven_turbo_v2_5",  # Fastest + highest quality
+        "voice_settings": {
+            "stability": 0.75,
+            "similarity_boost": 0.85,
+            "style": 0.1,
+            "use_speaker_boost": True
+        }
+    }
+
     try:
-        communicate = edge_tts.Communicate(text, "en-US-AndrewNeural")
+        response = requests.post(url, json=data, headers=headers, stream=True, timeout=30)
+        response.raise_for_status()
+
+        audio_bytes = io.BytesIO()
+        for chunk in response.iter_content(chunk_size=8192):
+            if chunk:
+                audio_bytes.write(chunk)
         
-        mp3_fp = io.BytesIO()
-        
-        # Stream audio chunks directly to memory, checking for data key
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio" and "data" in chunk: 
-                mp3_fp.write(chunk["data"])
-                
-        mp3_fp.seek(0)
-        
-        # Upload directly from memory to Cloudinary (FIXED: removed redundant 'file' argument)
+        if audio_bytes.tell() == 0:
+            print("Warning: No audio data received from ElevenLabs")
+            return None
+            
+        audio_bytes.seek(0)
+
+        # Upload to Cloudinary
         upload_result = cloudinary.uploader.upload(
-            mp3_fp, 
-            resource_type="video", 
+            audio_bytes,
+            resource_type="video",
             folder="interview_audio",
-            public_id=f"audio_{session_id}_{int(time.time())}"
+            public_id=f"audio_{session_id}_{int(time.time())}",
+            format="mp3"
         )
         return upload_result.get("secure_url")
 
     except Exception as e:
-        print(f"Audio Generation/Upload Error: {e}")
+        print(f"ElevenLabs TTS Error: {e}")
         return None
 
 def extract_text_from_pdf(file_bytes):
@@ -221,7 +249,7 @@ def extract_text_from_pdf(file_bytes):
 
 @app.get("/")
 async def root():
-    return {"message": "Interview AI Backend is Running"}
+    return {"message": "Interview AI Backend is Running ✅ ElevenLabs TTS Ready"}
 
 @app.post("/start_interview")
 async def start_interview(
@@ -255,6 +283,7 @@ async def start_interview(
 
     audio_url = None
     if mode == "voice":
+        print(f"🔊 Generating initial greeting audio for {name}...")
         audio_url = await generate_audio(greeting, session.id)
 
     return {
@@ -287,9 +316,9 @@ async def process_audio(
 
         client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
         
-        with open(temp_file_path, "rb") as audio:
+        with open(temp_file_path, "rb") as audio_file:
             transcription = client.audio.transcriptions.create(
-                file=(temp_file_path, audio.read()), 
+                file=audio_file,
                 model="whisper-large-v3-turbo",
                 language="en",
                 temperature=0.0,
@@ -310,6 +339,7 @@ async def process_audio(
     
     audio_url = ""
     if session.mode == "voice":
+        print(f"🔊 Generating AI response audio...")
         audio_url = await generate_audio(ai_response, session.id)
 
     return {
