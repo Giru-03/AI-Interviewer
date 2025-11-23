@@ -4,7 +4,7 @@ import time
 import io
 import json
 import tempfile
-from typing import List, Dict
+from typing import List, Dict, Optional
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -12,11 +12,12 @@ from pypdf import PdfReader
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, messages_to_dict, messages_from_dict
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field, SecretStr
 import requests
+import redis
 import cloudinary
 import cloudinary.uploader
 from groq import Groq
@@ -162,50 +163,125 @@ You are now starting the interview.
         self.memory.add_message(AIMessage(content=resp_content))
         return resp_content
 
-sessions: Dict[str, InterviewSession] = {}
+class SessionStore:
+    def __init__(self):
+        self.redis_url = os.getenv("REDIS_URL")
+        self.redis_client = None
+        self.local_cache = {}
+        
+        if self.redis_url:
+            try:
+                self.redis_client = redis.from_url(self.redis_url, decode_responses=True)
+                # Test connection immediately to catch auth errors early
+                self.redis_client.ping()
+                print("Connected to Redis")
+            except Exception as e:
+                print(f"Failed to connect to Redis: {e}")
+                self.redis_client = None # Fallback to local cache on error
+
+    def save(self, session: InterviewSession):
+        if self.redis_client:
+            # Optimize: Only save if messages changed or it's a new session
+            # For now, we just save asynchronously or use pipeline if possible, 
+            # but since this is sync redis, we can just optimize what we send.
+            
+            msgs = messages_to_dict(session.memory.messages)
+            data = {
+                "id": session.id,
+                "name": session.name,
+                "role": session.role,
+                "resume_text": session.resume_text,
+                "duration_minutes": str(session.duration_minutes),
+                "start_time": str(session.start_time),
+                "finished": str(session.finished),
+                "mode": session.mode,
+                "messages": json.dumps(msgs)
+            }
+            # Use pipeline to reduce round trips
+            pipe = self.redis_client.pipeline()
+            pipe.hset(f"session:{session.id}", mapping=data)
+            pipe.expire(f"session:{session.id}", 3600)
+            pipe.execute()
+        else:
+            self.local_cache[session.id] = session
+
+    def get(self, session_id: str) -> Optional[InterviewSession]:
+        # Check local cache first for speed (optional optimization, but risky if scaling horizontally)
+        # For now, we stick to Redis for truth, but we can optimize the fetch.
+        
+        if self.redis_client:
+            # Use pipeline to check existence and get data in one go? 
+            # Actually hgetall returns empty dict if key doesn't exist, so we can skip exists check.
+            data = self.redis_client.hgetall(f"session:{session_id}")
+            
+            if not data:
+                return None
+            
+            session = InterviewSession(
+                name=data["name"],
+                role=data["role"],
+                resume_text=data["resume_text"],
+                duration_minutes=int(float(data["duration_minutes"])),
+                mode=data.get("mode", "voice")
+            )
+            session.id = data["id"]
+            session.start_time = float(data["start_time"])
+            session.finished = data["finished"] == "True"
+            
+            msgs = messages_from_dict(json.loads(data["messages"]))
+            session.memory.clear() 
+            for m in msgs:
+                session.memory.add_message(m)
+                
+            return session
+        else:
+            return self.local_cache.get(session_id)
+
+session_store = SessionStore()
 
 async def generate_audio(text: str, session_id: str):
     if not text or not text.strip():
         return None
 
-    api_key = os.getenv("ELEVENLABS_API_KEY")
-    voice_id = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  
+    api_key = os.getenv("MURF_API_KEY")
+    voice_id = os.getenv("MURF_VOICE_ID", "en-US-cooper")  
 
     if not api_key:
-        print("ELEVENLABS_API_KEY not set")
+        print("MURF_API_KEY not set")
         return None
 
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+    url = "https://api.murf.ai/v1/speech/generate"
 
     headers = {
-        "Accept": "audio/mpeg",
-        "xi-api-key": api_key,
+        "api-key": api_key,
         "Content-Type": "application/json"
     }
 
     payload = {
+        "voiceId": voice_id,
         "text": text,
-        "model_id": "eleven_turbo_v2_5",
-        "voice_settings": {
-            "stability": 0.75,
-            "similarity_boost": 0.85,
-            "style": 0.1,
-            "use_speaker_boost": True
-        }
+        "style": "Promo",
+        "rate": 0,
+        "pitch": 0,
+        "sampleRate": 48000,
+        "format": "MP3",
+        "channel": "MONO"
     }
 
     try:
-        response = requests.post(url, json=payload, headers=headers, stream=True, timeout=30)
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
         response.raise_for_status()
+        
+        data = response.json()
+        audio_url = data.get("audioFile")
+        
+        if not audio_url:
+            print("Murf API did not return an audio URL")
+            return None
 
-        audio_bytes = io.BytesIO()
-        for chunk in response.iter_content(chunk_size=8192):
-            if chunk:
-                audio_bytes.write(chunk)
-        audio_bytes.seek(0)
-
+        # Upload the URL directly to Cloudinary
         upload_result = cloudinary.uploader.upload(
-            audio_bytes,
+            audio_url,
             resource_type="video",
             folder="interview_audio",
             public_id=f"audio_{session_id}_{int(time.time())}",
@@ -214,7 +290,7 @@ async def generate_audio(text: str, session_id: str):
         return upload_result.get("secure_url")
 
     except Exception as e:
-        print(f"ElevenLabs TTS Error: {e}")
+        print(f"Murf TTS Error: {e}")
         return None
 
 def extract_text_from_pdf(file_bytes):
@@ -232,7 +308,7 @@ def extract_text_from_pdf(file_bytes):
 
 @app.get("/")
 async def root():
-    return {"message": "Interview AI Backend Running – ElevenLabs TTS Active"}
+    return {"message": "Interview AI Backend Running"}
 
 @app.post("/start_interview")
 async def start_interview(
@@ -255,10 +331,11 @@ async def start_interview(
         resume_text = "No resume provided."
 
     session = InterviewSession(name, role, resume_text, duration, mode)
-    sessions[session.id] = session
+    session_store.save(session)
 
     greeting = f"Hello {name}, thank you for joining me. This is a {duration}-minute timed interview for the {role} position. We'll begin now — please tell me about yourself and your background."
     session.memory.add_message(AIMessage(content=greeting))
+    session_store.save(session)
 
     audio_url = None
     if mode == "voice":
@@ -276,10 +353,10 @@ async def process_audio(
     session_id: str = Form(...),
     file: UploadFile = File(...)
 ):
-    if session_id not in sessions:
+    session = session_store.get(session_id)
+    if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    session = sessions[session_id]
     user_text = ""
     is_silence = False
 
@@ -311,6 +388,7 @@ async def process_audio(
         user_text = "[SILENCE]"
 
     ai_response = await session.get_response(user_text, is_silence)
+    session_store.save(session)
     
     audio_url = ""
     if session.mode == "voice":
@@ -325,11 +403,11 @@ async def process_audio(
 
 @app.post("/process_text")
 async def process_text(interaction: TextInteraction):
-    if interaction.session_id not in sessions:
+    session = session_store.get(interaction.session_id)
+    if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
-    session = sessions[interaction.session_id]
     ai_response = await session.get_response(interaction.text, interaction.is_silence)
+    session_store.save(session)
     
     return {
         "finished": session.finished,
@@ -338,10 +416,9 @@ async def process_text(interaction: TextInteraction):
 
 @app.get("/generate_report/{session_id}")
 async def generate_report(session_id: str):
-    if session_id not in sessions:
+    session = session_store.get(session_id)
+    if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-
-    session = sessions[session_id]
 
     transcript = ""
     for msg in session.memory.messages:
@@ -372,7 +449,11 @@ async def generate_report(session_id: str):
 You are an expert hiring manager evaluating a timed technical interview.
 
 Analyze the full transcript below. 
-**IMPORTANT**: If the candidate's response is labeled "[No Response / Silence]", you MUST give them a score of 0 for that question and note that they did not answer. Do NOT hallucinate an answer for them.
+**CRITICAL INSTRUCTIONS**:
+1. **NO HALLUCINATIONS**: If the transcript is empty, short, or contains mostly "[No Response / Silence]", return a report explicitly stating that the interview was incomplete.
+2. **ZERO TOLERANCE FOR SILENCE**: If the candidate's response is labeled "[No Response / Silence]", you MUST give them a score of 0 for that question.
+3. **FACTUAL ANALYSIS ONLY**: Do not invent strengths or improvements. Only base them on the actual words spoken by the candidate.
+4. **STRICT SCORING**: If the candidate did not answer technical questions, the technical_rating MUST be 0.
 
 Analyze the transcript and for each meaningful question-answer pair provide details.
 **Strictly return a JSON object** with the following fields:
