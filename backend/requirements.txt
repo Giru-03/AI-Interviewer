@@ -3,13 +3,12 @@ uvicorn
 python-multipart
 pypdf
 python-dotenv
-langchain-groq
 langchain
-langchain_community
+langchain-core
+langchain-groq
 pydantic
 edge-tts
 cloudinary
 groq
 aiofiles
 requests
-io
