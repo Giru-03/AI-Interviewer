@@ -9,13 +9,11 @@
       }
     }
   ],
-  "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "https://ai-interviewer-api.vercel.app/$1"
-    }
-  ],
   "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "https://ai-interviewer-api.vercel.app/$1"
+    },
     {
       "src": "/favicon.svg",
       "dest": "/favicon.svg"
