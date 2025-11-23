@@ -33,6 +33,8 @@ An intelligent AI agent designed to help users prepare for job interviews by con
 
 ## 🏗️ Architecture
 
+![System Architecture](./sitepics/Arctitecture.png)
+
 The application follows a decoupled client-server architecture:
 
 1.  **Frontend**: A React SPA handles user input (voice/text), manages the interview session state, and displays the final report. It uses the Web Audio API for silence detection to automatically send voice input when the user stops speaking.
