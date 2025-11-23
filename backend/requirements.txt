@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+python-multipart
+pydantic
+python-dotenv
+langchain-groq
+langchain-core
+pypdf
+edge-tts
+cloudinary
